@@ -5,10 +5,16 @@
 package frc.robot;
 
 import static edu.wpi.first.units.Units.*;
+import static frc.robot.generated.TunerConstants.ConstantCreator;
 
+import com.ctre.phoenix6.CANBus;
+import com.ctre.phoenix6.configs.CANcoderConfiguration;
+import com.ctre.phoenix6.configs.TalonFXConfiguration;
 import com.ctre.phoenix6.swerve.SwerveModule.DriveRequestType;
+import com.ctre.phoenix6.swerve.SwerveModuleConstants;
 import com.ctre.phoenix6.swerve.SwerveRequest;
 
+import edu.wpi.first.math.filter.SlewRateLimiter;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.Commands;
@@ -16,6 +22,7 @@ import edu.wpi.first.wpilibj2.command.button.CommandXboxController;
 import edu.wpi.first.wpilibj2.command.button.RobotModeTriggers;
 import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine.Direction;
 
+import frc.robot.generated.ModuleConstants;
 import frc.robot.generated.TunerConstants;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
 
@@ -23,12 +30,14 @@ import frc.robot.subsystems.ElevatorSubsystem;
 import edu.wpi.first.wpilibj2.command.RunCommand;
 
 import frc.robot.subsystems.CoralMechanism;
+import frc.robot.Constants.OperatorConstants;
+import frc.robot.commands.CoralCommand;
 
 public class RobotContainer {
     private double MaxSpeed = TunerConstants.kSpeedAt12Volts.in(MetersPerSecond); // kSpeedAt12Volts desired top speed
     private double MaxAngularRate = RotationsPerSecond.of(0.75).in(RadiansPerSecond); // 3/4 of a rotation per second max angular velocity
 
-    private final CoralMechanism toggleMotor = new CoralMechanism();
+    private final CANBus kCANBus = new CANBus("rio");
 
     /* Setting up bindings for necessary control of the swerve drive platform */
     private final SwerveRequest.FieldCentric drive = new SwerveRequest.FieldCentric()
@@ -39,25 +48,65 @@ public class RobotContainer {
 
     private final Telemetry logger = new Telemetry(MaxSpeed);
 
-    private final CommandXboxController joystick = new CommandXboxController(0);
+    protected final CommandXboxController joystick = new CommandXboxController(0);
 
-    public final CommandSwerveDrivetrain drivetrain = TunerConstants.createDrivetrain();
+    public final CommandSwerveDrivetrain drivetrain;// = TunerConstants.createDrivetrain();
 
-    public final ElevatorSubsystem elevator = new ElevatorSubsystem();
+    private final SlewRateLimiter m_xspeedLimiter = new SlewRateLimiter(3);
+    private final SlewRateLimiter m_yspeedLimiter = new SlewRateLimiter(3);
+    private final SlewRateLimiter m_rotLimiter = new SlewRateLimiter(3);
 
-    public RobotContainer() {
+    private final Sensitivity sensitivityPos = 
+        new Sensitivity(OperatorConstants.Threshold, OperatorConstants.ZeroValue, OperatorConstants.CuspX, OperatorConstants.LinCoef, OperatorConstants.SpeedLimitX);
+
+    //TODO Rot constants
+    private final Sensitivity sensitivityRot =
+        new Sensitivity(OperatorConstants.Threshold, OperatorConstants.ZeroValue, OperatorConstants.CuspX, OperatorConstants.LinCoef, OperatorConstants.SpeedLimitRot);
+
+    public RobotContainer(ModuleConstants frontLeft, ModuleConstants frontRight, ModuleConstants backLeft, ModuleConstants backRight) {
+        drivetrain = createDrivetrain(frontLeft, frontRight, backLeft, backRight);
+
         configureBindings();
     }
 
-    private void configureBindings() {
+    protected SwerveModuleConstants<TalonFXConfiguration, TalonFXConfiguration, CANcoderConfiguration> createModuleConstants(ModuleConstants constants) {
+        return ConstantCreator.createModuleConstants(
+            constants.steerMotorId, constants.driveMotorId, constants.encoderId,
+            constants.encoderOffset,
+            constants.xPos, constants.yPos,
+            TunerConstants.kInvertLeftSide,
+            constants.steerMotorInverted, constants.encoderInverted
+        );
+    }
+
+    public CommandSwerveDrivetrain createDrivetrain(ModuleConstants frontLeft, ModuleConstants frontRight, ModuleConstants backLeft, ModuleConstants backRight) {
+        return new CommandSwerveDrivetrain(
+            TunerConstants.DrivetrainConstants,
+            createModuleConstants(frontLeft), createModuleConstants(frontRight),
+            createModuleConstants(backLeft), createModuleConstants(backRight)
+        );
+    }
+
+    protected void configureBindings() {
         // Note that X is defined as forward according to WPILib convention,
         // and Y is defined as to the left according to WPILib convention.
         drivetrain.setDefaultCommand(
             // Drivetrain will execute this command periodically
             drivetrain.applyRequest(() ->
-                drive.withVelocityX(-joystick.getLeftY() * MaxSpeed) // Drive forward with negative Y (forward)
-                    .withVelocityY(-joystick.getLeftX() * MaxSpeed) // Drive left with negative X (left)
-                    .withRotationalRate(-joystick.getRightX() * MaxAngularRate) // Drive counterclockwise with negative X (left)
+                drive.withVelocityX(
+                    MaxSpeed * m_xspeedLimiter.calculate(-joystick.getLeftY())
+//                    MaxSpeed * sensitivityPos.transfer(-joystick.getLeftY())
+//                        -joystick.getLeftY() * MaxSpeed
+                    ) // Drive forward with negative Y (forward)
+                    .withVelocityY(
+                        MaxSpeed * m_yspeedLimiter.calculate(-joystick.getLeftY())
+//                        MaxSpeed * sensitivityPos.transfer(-joystick.getLeftX())
+//                        -joystick.getLeftX() * MaxSpeed
+                    ) // Drive left with negative X (left)
+                    .withRotationalRate(
+                        MaxSpeed * m_rotLimiter.calculate(-joystick.getRightX())
+//                        -joystick.getRightX() * MaxAngularRate
+                    ) // Drive counterclockwise with negative X (left)
             )
         );
 
@@ -71,32 +120,9 @@ public class RobotContainer {
         
 
         joystick.x().whileTrue(drivetrain.applyRequest(() -> brake));
-        joystick.b().whileTrue(drivetrain.applyRequest(() ->
+        joystick.rightBumper().whileTrue(drivetrain.applyRequest(() ->
             point.withModuleDirection(new Rotation2d(-joystick.getLeftY(), -joystick.getLeftX()))
         ));
-
-        // Coral Mechanism
-        // Run Coral motor based on right trigger pressure
-        toggleMotor.setDefaultCommand(
-            new RunCommand(
-                () -> {
-                    double forward = joystick.getRightTriggerAxis(); // 0 → 1
-                    double reverse = joystick.getLeftTriggerAxis();  // 0 → 1
-                    double speed = forward - reverse; // right = positive, left = negative
-                    toggleMotor.setSpeed(speed);
-                },
-                toggleMotor
-            )
-        );
-
-        //Elevator bindings
-        joystick.povDown().whileTrue(new RunCommand(() -> elevator.jogUp(), elevator));
-        joystick.povUp().whileTrue(new RunCommand(() -> elevator.jogDown(), elevator));
-        joystick.povLeft().or(joystick.povRight()).whileTrue(new RunCommand(() -> elevator.stop(), elevator));
-
-        joystick.b().onTrue(new RunCommand(() -> elevator.moveToTop(), elevator));
-        joystick.y().onTrue(new RunCommand(() -> elevator.moveToL1(), elevator));
-        joystick.a().onTrue(new RunCommand(() -> elevator.moveToBottom(), elevator));
 
         // Run SysId routines when holding back/start and X/Y.
         // Note that each routine should be run exactly once in a single log.
