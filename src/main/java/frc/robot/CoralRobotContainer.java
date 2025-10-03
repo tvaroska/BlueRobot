@@ -14,6 +14,7 @@ import edu.wpi.first.wpilibj2.command.RunCommand;
 
 import frc.robot.subsystems.CoralMechanism;
 import frc.robot.commands.CoralCommand;
+import frc.robot.commands.AutoSelector;
 
 public class CoralRobotContainer extends RobotContainer {
     private final CoralMechanism coralMech = new CoralMechanism(TunerConstants.kCANBus);
@@ -59,7 +60,8 @@ public class CoralRobotContainer extends RobotContainer {
         joystick.a().onTrue(new RunCommand(() -> elevator.moveToBottom(), elevator));
     }
 
+    @Override
     public Command getAutonomousCommand() {
-        return Commands.print("No autonomous command configured");
+        return AutoSelector.initializeCoralAutos(drivetrain, getVisionSubsystem(), elevator, coralMech);
     }
 }

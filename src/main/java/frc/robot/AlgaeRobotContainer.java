@@ -30,6 +30,7 @@ import edu.wpi.first.wpilibj2.command.RunCommand;
 import frc.robot.subsystems.Pneumatics;
 import frc.robot.Constants.OperatorConstants;
 import frc.robot.commands.CoralCommand;
+import frc.robot.commands.AutoSelector;
 
 public class AlgaeRobotContainer extends RobotContainer {
     private final Pneumatics pneumatics = new Pneumatics();
@@ -51,7 +52,8 @@ public class AlgaeRobotContainer extends RobotContainer {
         joystick.y().onTrue(new InstantCommand(() -> pneumatics.disableCompressor()));
     }
 
+    @Override
     public Command getAutonomousCommand() {
-        return Commands.print("No autonomous command configured");
+        return AutoSelector.initializeAlgaeAutos(drivetrain, getVisionSubsystem(), pneumatics);
     }
 }
